@@ -1,4 +1,4 @@
-# Lean Linear RAT Proof Checker
+# Lean SAT Proof Checker
 
 This is an exploratory effort to build a proof checker for various formats
 used by the SAT community.  Currently, we have focused on the [LRAT SAT Proof format](https://www.cs.utexas.edu/~marijn/publications/lrat.pdf).
