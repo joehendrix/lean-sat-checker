@@ -10,7 +10,7 @@ manager.  The main binary can then be built by running:
 ```
 % leanpkg configure
 % leanpkg build bin
-``
+```
 
 Once the binary is built, you can then try it on example files by running:
 
