@@ -1,31 +1,60 @@
 import LRat.Common
 
 structure HStream where
- next : IO.Ref UInt8
- rest : IO.FS.Handle
+  eofRef : IO.Ref Bool
+  next : IO.Ref UInt8
+  rest : IO.FS.Handle
 
 namespace HStream
 
 def fromPath (path:String) : IO HStream := do
   let h ← IO.FS.Handle.mk path IO.FS.Mode.read
-  let n ← h.read 1
-  let r ← IO.mkRef (n.get! 0)
-  pure { next := r, rest := h }
 
-def peekByte (h:HStream) : IO UInt8 := h.next.get
+  let eof ← h.isEof
+  let b ← if eof then pure ByteArray.empty else h.read 1
+  let n := if b.size > 0 then b.get! 0 else 0
+
+  let eofRef ← IO.mkRef (b.size == 0)
+  let nextRef ← IO.mkRef n
+  pure { eofRef := eofRef, next := nextRef, rest := h }
+
+def isEof (h:HStream) : IO Bool := h.eofRef.get
+
+def peekByte (h:HStream) : IO UInt8 := do
+  if ← h.isEof then
+    throw $ IO.userError "Attempt to read past end of file."
+  h.next.get
 
 def skipByte (h:HStream) : IO Unit := do
-  let n ← h.rest.read 1
-  h.next.set (n.get! 0)
+  if ← h.isEof then
+    throw $ IO.userError "Attempt to read past end of file."
+  if ← h.rest.isEof then
+    h.eofRef.set true
+  else
+    let b ← h.rest.read 1
+    if b.size == 0 then
+      h.eofRef.set true
+    else
+      h.next.set (b.get! 0)
 
 def getByte (h:HStream) : IO UInt8 := do
-  let b ← peekByte h
-  h.skipByte
+  if ← h.eofRef.get then
+    throw $ IO.userError "Attempt to read past end of file."
+  let b ← h.next.get
+  if ← h.rest.isEof then
+    h.eofRef.set true
+  else
+    let b ← h.rest.read 1
+    if b.size == 0 then
+      h.eofRef.set true
+    else
+      h.next.set (b.get! 0)
   pure b
 
 def getLine (h:HStream) : IO Unit := do
-  let b ← h.next.get
-  if b == 10 then
+  if ← h.eofRef.get then
+    throw $ IO.userError "Attempt to read past end of file."
+  if (← h.next.get) == 10 then
     h.skipByte
   else
     let _ ← h.rest.getLine
@@ -33,8 +62,7 @@ def getLine (h:HStream) : IO Unit := do
 
 -- Skip whitespace
 partial def skipWS (h:HStream) : IO Unit := do
-  let b ← h.peekByte
-  if b == ' '.toUInt8 then
+  if (← h.peekByte) == ' '.toUInt8 then
     h.skipByte
     h.skipWS
   else

@@ -1,8 +1,12 @@
+
 import LRat.Dimacs
 import LRat.LRat
 
 def main (args:List String) : IO Unit := do
   match args with
+  | [dimacsFile] => do
+    let h ← HStream.fromPath dimacsFile
+    let cnf ← Dimacs.read h
   | [dimacsFile, lratFile] => do
     let h ← HStream.fromPath dimacsFile
     let cnf ← Dimacs.read h

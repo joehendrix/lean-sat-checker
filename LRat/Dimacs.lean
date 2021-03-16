@@ -9,7 +9,7 @@ def Lit := SignedInt
 
 namespace Lit
 
-def isNull (l:Lit) : Bool := !(l.value == 0)
+def isNull (l:Lit) : Bool := l.value == 0
 
 def var (l:Lit) : UInt64 := l.magnitude
 
@@ -57,7 +57,8 @@ protected def member (c:Clause) (l:Lit) : Bool := do
 protected def size (self:Clause) : Nat := self.lits.size
 
 /-- Return lit at given index in clause. -/
-def getOp (self:Clause) (idx:Nat) : Lit := self.lits[idx]
+def getOp (self:Clause) (idx:Nat) : Lit :=
+  if idx < self.lits.size then self.lits[idx] else ⟨0⟩
 
 --- @Clause.read' h vc a@ Read a list of ints with magnitude between 1 and vc
 --- and stops when it reads a zero.
@@ -89,7 +90,7 @@ partial def Dimacs.read (h:HStream) : IO Dimacs := do
     read h
   else if c == 'p'.toUInt8 then
     let cnf ← h.getWord
-    if cnf != "cnf".toByteArray then do
+    if cnf != "cnf".toByteArray then
       throw (IO.userError ("Expected \"cnf\" -- found " ++ toString cnf))
     else
       let varCnt    ← h.getUInt64
@@ -102,7 +103,8 @@ partial def Dimacs.read (h:HStream) : IO Dimacs := do
                   pure a
                 else do
                   let c ← Clause.read h varCnt
-                  let _ ← h.getLine
+                  if !(← h.isEof) then
+                    h.getLine
                   loop (remaining - 1) (a.push c)
       let a ← loop clauseCnt Array.empty
       pure { varCount := varCnt, clauses := a }

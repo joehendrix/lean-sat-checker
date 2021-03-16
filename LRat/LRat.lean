@@ -19,25 +19,26 @@ end Std
 structure Assignment where
   values : Std.HashMap UInt64 Bool
 
-/-
-application type mismatch
-  (0, c)
-argument
-  c
-has type
-  Clause : Type
-but is expected to have type
-  Array Lit : Type
--/
-
 namespace Assignment
+
+protected def toString (a:Assignment) : String := do
+  let av := a.values.toArray
+  if av.size == 0 then
+    "[]"
+  else
+    let ppElt (p:UInt64 × Bool) := if p.snd then s! "{p.fst}" else s! "!{p.fst}"
+    let mut r : String := s! "[{ppElt av[0]}"
+    for i in [1:av.size] do
+      r := s! "{r},{ppElt av[i]}"
+    s! "{r}]"
+
+instance : ToString Assignment where
+  toString := Assignment.toString
 
 def empty : Assignment := { values := Std.HashMap.empty }
 
 --- Set the value of the literal in the assignment
---
--- Fails if literal already assigned.
-def set! (a:Assignment) (l:Lit) : Assignment :=
+def set (a:Assignment) (l:Lit) : Assignment :=
   { values := a.values.insert l.var l.polarity }
 
 --- Set the value of the literal in the assignment
@@ -70,6 +71,8 @@ end Assignment
 @[reducible]
 def ClauseId := UInt64
 
+def ClauseId.ofNat := UInt64.ofNat
+
 -- A set of clauses for checking.
 structure ClauseDB where
   -- First clause index (0 if empty)
@@ -83,9 +86,18 @@ structure ClauseDB where
 
 namespace ClauseDB
 
-def fromDimacs (d:Dimacs) : ClauseDB := sorry
-
---def empty : ClauseDB := { maxIdx := 0, clauses := ∅ }
+def fromDimacs (d:Dimacs) : ClauseDB := do
+  let cl := d.clauses
+  if cl.size == 0 then
+    pure { headClauseId := 0, lastClauseId := 0, maxClauseId := 0, clauses := ∅ }
+  else
+    let cnt := ClauseId.ofNat cl.size
+    let mut cm : Std.HashMap ClauseId (ClauseId × ClauseId × Array Lit) := ∅
+    for i in [1:cl.size+1], c in cl do
+      let i := ClauseId.ofNat i
+      let n := if i == cnt then 0 else i+1
+      cm := cm.insert i (i-1, n, c.lits)
+    pure { headClauseId := 1, lastClauseId := cnt, maxClauseId := cnt, clauses := cm }
 
 protected partial
 def forIn {β} [Monad m] (db : ClauseDB) (b : β)
@@ -146,7 +158,6 @@ inductive RupResult
 | trueLit : RupResult -- Returned if literal in clause is true
 | multipleUnassigned : RupResult -- Returned if here are multiple unassigned literals.
 
-
 /-- Apply unit propagation to an assignment and clause-/
 def rup (a:Assignment) (cl:Clause) : RupResult := do
   -- Return conflict if we do not find an unassigned or true literal
@@ -188,11 +199,12 @@ partial def getRup (h:HStream) (db:ClauseDB) (a:Assignment) : IO ClauseId := do
     | RupResult.conflict => do
       let r ← SignedInt.read h db.maxClauseId
       if !r.isZero then
-        throw $ IO.userError "Expected zero after conflict."
-      let _ <- h.getLine
+        throw $ IO.userError $ s! "Expected zero instead of {r} after conflict."
+      if !(←h.isEof) then
+        h.getLine
       pure 0
     | RupResult.unit l => do
-      getRup h db (a.set! l)
+      getRup h db (a.set l)
     | RupResult.trueLit =>
       throw $ IO.userError "Found true literal in clause."
     | RupResult.multipleUnassigned =>
@@ -223,14 +235,14 @@ partial def readRup (h:HStream) (db:ClauseDB) (pivot:Lit) (a:Assignment) : IO Un
           continue
         match a[l] with
         -- Assign proof
-        | none => a := a.set! l.negate
+        | none => a := a.set l.negate
         -- If literal is already false then do nothing
         | some false => pure ()
         -- If literal is true, then we should be able to resolve.
         | some true =>
           resolved := true
           break
-      -- We already resolved this so there should just be end of
+      -- We already resolved this so there should just be end of clauses.
       if resolved then
         let n ← SignedInt.read h db.maxClauseId
         if !n.isZero && n.isPos then
@@ -239,10 +251,11 @@ partial def readRup (h:HStream) (db:ClauseDB) (pivot:Lit) (a:Assignment) : IO Un
       else
         clId ← getRup h db a
 
+def lratError {α} (msg:String) : IO α := do
+  throw $ IO.userError msg
+
 partial def readLRat (h:HStream) (varCount:UInt64) (db:ClauseDB) : IO Unit := do
   let newClauseId ← h.getUInt64
-  if h : newClauseId ≤ db.maxClauseId then
-    throw $ IO.userError "Expected new clause to exceed maximum clause."
   h.skipWS;
   let c ← h.peekByte
   -- If deletion information
@@ -258,7 +271,17 @@ partial def readLRat (h:HStream) (varCount:UInt64) (db:ClauseDB) : IO Unit := do
     loop db
     readLRat h varCount db
   else
+    if h : newClauseId ≤ db.maxClauseId then
+      lratError $ s! "Expected new clause id {newClauseId} to exceed maximum clause id {db.maxClauseId}."
     let cl ← Clause.read h varCount
-    readRup h db cl.pivot.negate (Assignment.negatedClause cl)
-    let db := db.insertClause newClauseId cl
-    readLRat h varCount db
+    if cl.size == 0 then
+      let clId0 ← getRup h db (Assignment.negatedClause cl)
+      if clId0 != 0 then
+        lratError "Final conflict clause only resolvable through unit propagation."
+    else
+      readRup h db cl.pivot.negate (Assignment.negatedClause cl)
+    if cl.size == 0 then
+      IO.println "UNSAT"
+    else
+      let db := db.insertClause newClauseId cl
+      readLRat h varCount db
