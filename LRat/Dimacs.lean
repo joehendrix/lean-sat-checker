@@ -1,4 +1,4 @@
-import LRat.HStream
+import LRat.ByteStream
 import LRat.SignedInt
 
 /-- A literal
@@ -18,7 +18,7 @@ def polarity (l:Lit) : Bool := l.isPos
 
 -- @Lit.read h vc@ read the next signed numeral from @h@ with magnitude
 -- between 0 and vc and returns a literal for it.
-def read (h:HStream) (varCount: UInt64) : IO Lit := SignedInt.read h varCount
+def read (h:ByteStream) (varCount: UInt64) : IO Lit := SignedInt.read h "Variable" varCount
 
 -- Negate literal
 def negate (l:Lit) : Lit := ⟨l.value ^^^ 1⟩
@@ -30,10 +30,30 @@ protected def beq (x y : Lit) : Bool := x.value == y.value
 instance : BEq Lit where
   beq := Lit.beq
 
+instance : ToString Lit where
+  toString := SignedInt.toString
+
 end Lit
 
 structure Clause :=
 (lits : Array Lit)
+
+class ForIn2 (m : Type u₁ → Type u₂) (ρ : Type u) (x : ρ) (α : outParam (Type v)) where
+  forIn {β} [Monad m] (b : β) (f : α → β → m (ForInStep β)) : m β
+
+partial def Fin.forIn {β} {n} [Monad m] (b : β) (f : (a : Fin n) → β → m (ForInStep β)) : m β := do
+  let rec loop (i:Nat) (b:β) : m β := do
+        if h : i < n then
+            match ← f  ⟨i, h⟩ b with
+            | ForInStep.done a => pure a
+            | ForInStep.yield a => loop (i+i) b
+        else
+          pure b
+  loop 0 b
+
+instance (n:Nat) : ForIn2 m Type (Fin n) (Fin n) where
+  forIn := Fin.forIn
+
 
 namespace Clause
 
@@ -43,8 +63,12 @@ def pivot (c:Clause) : Lit := c.lits[0]
 
 protected def forIn {β} [Monad m] (x : Clause) (b : β) (f : Lit → β → m (ForInStep β)) : m β := x.lits.forIn b f
 
+instance : ForIn2 m Clause x Lit where
+  forIn := Clause.forIn x
+
 instance : ForIn m Clause Lit where
   forIn := Clause.forIn
+
 
 protected def member (c:Clause) (l:Lit) : Bool := do
   let mut r : Bool := false
@@ -62,7 +86,7 @@ def getOp (self:Clause) (idx:Nat) : Lit :=
 
 --- @Clause.read' h vc a@ Read a list of ints with magnitude between 1 and vc
 --- and stops when it reads a zero.
-partial def read' (h:HStream) (varCount: UInt64) (a:Array Lit) : IO Clause := do
+partial def read' (h:ByteStream) (varCount: UInt64) (a:Array Lit) : IO Clause := do
   h.skipWS
   let l ← Lit.read h varCount
   if l.isNull then
@@ -71,7 +95,7 @@ partial def read' (h:HStream) (varCount: UInt64) (a:Array Lit) : IO Clause := do
     read' h varCount (a.push l)
 
 /--- Read a line expected to contain a clause. -/
-def read (h:HStream) (varCount:UInt64): IO Clause := do
+def read (h:ByteStream) (varCount:UInt64): IO Clause := do
   read' h varCount Array.empty
 
 end Clause
@@ -83,7 +107,7 @@ structure Dimacs :=
 
 def Dimacs.clauseCount (d:Dimacs) : Nat := d.clauses.size
 
-partial def Dimacs.read (h:HStream) : IO Dimacs := do
+partial def Dimacs.read (h:ByteStream) : IO Dimacs := do
   let c ← h.getByte
   if c == 'c'.toUInt8 then
     let _ ← h.getLine

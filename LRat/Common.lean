@@ -1,3 +1,5 @@
+import Std.Data.HashMap
+
 def Char.toUInt8 (c:Char) := UInt8.ofNat c.toNat
 
 def UInt8.toChar (w:UInt8) : Char := Char.ofNat w.toNat
@@ -23,7 +25,14 @@ instance : BEq ByteArray where
 
 def max {α} [h:HasLessEq α] [DecidableRel (@HasLessEq.LessEq α h)] (x y : α) : α := if x ≥ y then x else y
 
-class Member (α : Type u) (β : Type v) where
-  member : α → β → Prop
+namespace Std
+namespace HashMap
+variable {α β} [BEq α] [Hashable α]
 
-infix:50 " ∈ "  => Member.member
+def modify (m:HashMap α β) (a:α) (f : β → β) : HashMap α β :=
+  match m.find? a with
+  | none => m
+  | some x => m.insert a (f x)
+
+end HashMap
+end Std
