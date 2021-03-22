@@ -1,4 +1,4 @@
-import LRat.ByteStream
+import SatChecker.ByteStream
 
 /--
  - SignedInt types encoded for quick sign tests and magnitude.

@@ -1,6 +1,6 @@
-import LRat.ByteStream
-import LRat.SignedInt
-import LRat.Dimacs
+import SatChecker.ByteStream
+import SatChecker.SignedInt
+import SatChecker.Dimacs
 import Std.Data.HashMap
 
 -- Maps variables to their assigned value (true or false)

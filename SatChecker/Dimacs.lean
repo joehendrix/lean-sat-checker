@@ -1,5 +1,5 @@
-import LRat.ByteStream
-import LRat.SignedInt
+import SatChecker.ByteStream
+import SatChecker.SignedInt
 
 /-- A literal
  - A literal is encoded as the literal index shifted by one.

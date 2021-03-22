@@ -1,4 +1,4 @@
-import LRat.Common
+import SatChecker.Common
 
 /--
  - A stream of bytes we we can peek one byte ahead.
