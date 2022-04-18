@@ -1,40 +1,8 @@
 import SatChecker.ByteStream
 import SatChecker.SignedInt
 import SatChecker.Dimacs
-import Std.Data.HashMap
 
--- Maps variables to their assigned value (true or false)
-structure Assignment where
-  values : Std.HashMap UInt64 Bool
-
-namespace Assignment
-
-protected def toString (a:Assignment) : String := do
-  let ppElt (p:UInt64 × Bool) : String := if p.snd then s!"{p.fst}" else s!"-{p.fst}"
-  @List.toString _ ⟨ppElt⟩ a.values.toList
-
-instance : ToString Assignment where
-  toString := Assignment.toString
-
-def empty : Assignment := { values := Std.HashMap.empty }
-
---- Set the value of the literal in the assignment
-def set (a:Assignment) (l:Lit) : Assignment :=
-  { values := a.values.insert l.var l.polarity }
-
--- Create assignment from negating literals in clause.
-def negatedClause (c:Clause) : Assignment := do
-  let mut a : Std.HashMap UInt64 Bool := ∅
-  for l in c do
-    a := a.insert l.var !l.polarity
-  { values := a }
-
-/-- Return value of literal in assignment (none if unassigned). -/
-def getOp (self:Assignment) (idx:Lit) : Option Bool :=
-  let r := self.values.find? idx.var
-  if idx.polarity then r else r.map not
-
-end Assignment
+import SatChecker.Assignment
 
 -- | A one based index of a clause
 @[reducible]
@@ -43,21 +11,37 @@ def ClauseId := UInt64
 def ClauseId.ofNat := UInt64.ofNat
 
 -- A set of clauses for checking.
+--
+-- This is designed to support efficient lookup of clauses by ids,
+-- clause deletion and traversing the list of all undeleted clauses.
 structure ClauseDB where
   -- First clause index (0 if empty)
   headClauseId :  ClauseId
   -- Maximum index added to clause db
   maxClauseId  : ClauseId
-  -- Clauses added to database
+  -- Maps clauses with given identifier to identifier of next
+  -- clause and literals in clause.
   clauses : Std.HashMap ClauseId (ClauseId × Array Lit)
 
 namespace ClauseDB
 
-def fromDimacs (d:Dimacs) : ClauseDB := do
+def member (c:Clause) (db:ClauseDB) : Prop :=
+  ∃(cid: ClauseId),
+    match db.clauses.find? cid with
+    | none => False
+    | some (_, lits) => c.lits = lits
+
+instance : Membership Clause ClauseDB where
+  mem := ClauseDB.member
+
+-- Return true if the assignment satifies all clauses in the database
+def satisfies (db:ClauseDB) (a:Assignment) : Prop := ∀(c: Clause), c ∈ db → a.satisfies c
+
+def fromDimacs (d:Dimacs) : ClauseDB :=
   let cl := d.clauses
   if cl.size == 0 then
-    pure { headClauseId := 0, maxClauseId := 0, clauses := ∅ }
-  else
+    { headClauseId := 0, maxClauseId := 0, clauses := ∅ }
+  else Id.run do
     let cnt := ClauseId.ofNat cl.size
     let mut cm : Std.HashMap ClauseId (ClauseId × Array Lit) := ∅
     for i in [1:cl.size+1], c in cl do
@@ -96,7 +80,7 @@ def visitClauses {β} (db : ClauseDB) (b : β)
         restLoop db false i nextId b
   headLoop db false db.headClauseId b
 
-def insertClause (db:ClauseDB) (clauseId:ClauseId) (c:Clause) : Option ClauseDB := do
+def insertClause (db:ClauseDB) (clauseId:ClauseId) (c:Clause) : Option ClauseDB :=
   if clauseId != db.maxClauseId + 1 then
     none
   else
@@ -105,7 +89,7 @@ def insertClause (db:ClauseDB) (clauseId:ClauseId) (c:Clause) : Option ClauseDB 
            clauses := db.clauses.insert clauseId (clauseId + 1, c.lits)
          }
 
-def deleteClause (db:ClauseDB) (clauseId:ClauseId) : ClauseDB := do
+def deleteClause (db:ClauseDB) (clauseId:ClauseId) : ClauseDB :=
   db.modify clauseId (λ(nextId, _) => (nextId, ∅))
 
 /-- Return clause at given index. -/
@@ -123,7 +107,7 @@ inductive RupResult
 | multipleUnassigned : RupResult -- Returned if here are multiple unassigned literals.
 
 /-- Apply unit propagation to an assignment and clause-/
-def rup (a:Assignment) (cl:Clause) : RupResult := do
+def rup (a:Assignment) (cl:Clause) : RupResult := Id.run do
   -- Return conflict if we do not find an unassigned or true literal
   let mut r : RupResult := RupResult.conflict
   -- Iterate through literals.
@@ -151,90 +135,39 @@ def rup (a:Assignment) (cl:Clause) : RupResult := do
 def UnitClauseArray := Array ClauseId
 
 /--
- - Read the unit propagation information and return terminating clauseId
- -/
-partial def getRup (h:ByteStream) (maxClauseId:ClauseId) : IO (UnitClauseArray × ClauseId) := do
-  let rec loop (a:Array ClauseId) : IO (UnitClauseArray × ClauseId) := do
-            let n ← SignedInt.read h "Clause" maxClauseId
-            if !n.isPos then
-              pure (a, n.magnitude)
-            else
-              loop (a.push n.magnitude)
-  loop Array.empty
-
-/--
- - Read the unit propagation and rat formula code.
+ - applyRup applies reverse unit propagation to extend an assignment
+ - containing literal implies by unit clauses.
  -
- - Returns nothing and next clause if conflict found and assignment otherwise.
+ - Returns nothing if conflict found and assignment otherwise.
  -/
-def applyRup (db:ClauseDB) (a:Assignment) (clauses:Array ClauseId) : Except String (Option Assignment) := do
+def applyRup (db:ClauseDB)
+             (a:Assignment) -- Assignment generated from reverse-unit propagation
+             (clauses:Array ClauseId)
+             : Except String (Option Assignment) := do
   let mut a : Assignment := a
-  let mut conflict : Bool := false
   for i in [0:clauses.size] do
     let clId := clauses[i]
     let nextClause := db[clId]
     match rup a nextClause with
     | RupResult.conflict => do
       if i != clauses.size - 1 then
-        throw $ "Trailing conflicts detected."
-      conflict := true
-      break
+        throw $ "Additional propagation steps defined after conflict detected."
+      return none
     | RupResult.unit l => do
       a := a.set l
     | RupResult.trueLit =>
-      throw $ "Found true literal in clause."
+      throw $ "Reverse unit propagation applied to clause assigned true."
     | RupResult.multipleUnassigned =>
-      throw $ "Multiple unassigned literals in clause."
-  pure $ if conflict then none else some a
+      throw $ "Reverse unit propagation applied to non-unit clause."
+  pure $ some a
 
-inductive Rule
--- A rule resolvable solely through unit propagation
-| rup (clId:ClauseId) (cl:Clause) (p:UnitClauseArray) : Rule
--- A lrat rule.
-| lrat (clId:ClauseId) (cl:Clause) (p:UnitClauseArray) (c: Array (ClauseId × UnitClauseArray)) : Rule
--- A rule to delete clauses
-| delete (a:Array ClauseId) : Rule
-
-/--
- - Get next rule from stream.
- -/
-partial def getRule (h:ByteStream) (varCount:UInt64) (maxClauseId:ClauseId) : IO Rule := do
-  let newClauseId ← h.getUInt64
-  h.skipWS;
-  let c ← h.peekByte
-  -- If deletion information
-  if c == 'd'.toUInt8 then
-    h.skipByte
-    -- Read clauses to delete
-    let rec loopDel (a:Array ClauseId) : IO Rule:= do
-          let clId ← h.getUInt64
-          if clId == 0 then
-            if !(←h.isEof) then h.getLine
-            pure (Rule.delete a)
-          else
-            loopDel (a.push clId)
-    loopDel ∅
-  else
-    if h : newClauseId ≤ maxClauseId then
-      throw $ IO.userError s!"Expected new clause id {newClauseId} to exceed maximum clause id {maxClauseId}."
-    let cl ← Clause.read h varCount
-    let (clauses, clId0) ← getRup h maxClauseId
-    if clId0 == 0 then
-      if !(←h.isEof) then h.getLine
-      pure (Rule.rup newClauseId cl clauses)
-    else
-      let rec loop (a:Array (ClauseId × UnitClauseArray)) (clId:ClauseId) : IO Rule := do
-            let (rest, next) ← getRup h maxClauseId
-            let a' := a.push (clId, rest)
-            if next == 0 then
-              if !(←h.isEof) then h.getLine
-              pure (Rule.lrat newClauseId cl clauses a')
-            else
-              loop a' next
-      loop ∅ clId0
+--theorem applyRupIsNone (db:ClauseDB) (a:Assignment) (cl:Array ClauseId)
+--   : applyRup db a cl = Except.ok none → isUnsat db a := sorry
 
 /- This checks the clause for a pivot. -/
-def ratCheckClause (db:ClauseDB) (pivot:Lit) (a:Assignment) (c: Array (ClauseId × UnitClauseArray)) (hintIdx:Nat) (i:ClauseId) (cl:Clause) : Except String Nat := do
+def ratCheckClause (db:ClauseDB) (pivot:Lit) (a:Assignment) (c: Array (ClauseId × UnitClauseArray)) (hintIdx:Nat) (i:ClauseId) (cl:Clause)
+    : Except String Nat := do
+
   if hintIdx ≥ c.size || i < c[hintIdx].fst then
     if cl.member pivot then
       throw $ s!"Pivot {pivot} in clause {i} when not expected."
@@ -265,11 +198,71 @@ def ratCheckClause (db:ClauseDB) (pivot:Lit) (a:Assignment) (c: Array (ClauseId 
       | none => pure ()
     pure (hintIdx+1)
 
+inductive LRatStep
+-- A rule resolvable solely through unit propagation
+| rup (clId:ClauseId) (cl:Clause) (p:UnitClauseArray)
+-- A lrat rule.
+| lrat (clId:ClauseId) (cl:Clause) (p:UnitClauseArray) (c: Array (ClauseId × UnitClauseArray))
+-- A rule to delete clauses
+| delete (a:Array ClauseId)
+
+namespace LRatStep
+
+/--
+ - Read the unit propagation information and return terminating clauseId
+ -/
+partial def getRup (h:ByteStream) (maxClauseId:ClauseId) : IO (UnitClauseArray × ClauseId) := do
+  let rec loop (a:Array ClauseId) : IO (UnitClauseArray × ClauseId) := do
+            let n ← SignedInt.read h "Clause" maxClauseId
+            if !n.isPos then
+              pure (a, n.magnitude)
+            else
+              loop (a.push n.magnitude)
+  loop Array.empty
+
+/--
+ - Get next step from LRat format
+ -/
+partial def read (h:ByteStream) (varCount:UInt64) (maxClauseId:ClauseId) : IO LRatStep := do
+  let newClauseId ← h.getUInt64
+  h.skipWS;
+  let c ← h.peekByte
+  -- If deletion information
+  if c == 'd'.toUInt8 then
+    h.skipByte
+    -- Read clauses to delete
+    let rec loopDel (a:Array ClauseId) : IO LRatStep := do
+          let clId ← h.getUInt64
+          if clId == 0 then
+            if !(←h.isEof) then h.getLine
+            pure (delete a)
+          else
+            loopDel (a.push clId)
+    loopDel ∅
+  else
+    if h : newClauseId ≤ maxClauseId then
+      throw $ IO.userError s!"Expected new clause id {newClauseId} to exceed maximum clause id {maxClauseId}."
+    let cl ← Dimacs.readClause h varCount
+    let (clauses, clId0) ← getRup h maxClauseId
+    if clId0 == 0 then
+      if !(←h.isEof) then h.getLine
+      pure (rup newClauseId cl clauses)
+    else
+      let rec loop (a:Array (ClauseId × UnitClauseArray)) (clId:ClauseId) : IO LRatStep := do
+            let (rest, next) ← getRup h maxClauseId
+            let a' := a.push (clId, rest)
+            if next == 0 then
+              if !(←h.isEof) then h.getLine
+              pure (lrat newClauseId cl clauses a')
+            else
+              loop a' next
+      loop ∅ clId0
+
 /--
  - This verifies a clause against the clause database.
  -/
-def verifyRule (db:ClauseDB) : Rule → Except String (Option ClauseDB)
-| Rule.rup clId c clauses =>
+def verify (db:ClauseDB) : LRatStep → Except String (Option ClauseDB)
+| rup clId c clauses =>
   let a := Assignment.negatedClause c
   match applyRup db a clauses with
   | Except.error msg   => throw s!"{clId} failed: {msg}"
@@ -281,7 +274,7 @@ def verifyRule (db:ClauseDB) : Rule → Except String (Option ClauseDB)
       match db.insertClause clId c with
       | none => throw s!"Unexpected clause id {clId}"
       | some db => pure (some db)
-| Rule.lrat clId c clauses cases => do
+| lrat clId c clauses cases => do
   let a := Assignment.negatedClause c
   if c.size == 0 then
     throw "{clid} failed: rat rule not allowed on empty clause."
@@ -294,11 +287,14 @@ def verifyRule (db:ClauseDB) : Rule → Except String (Option ClauseDB)
     match db.insertClause clId c with
     | none => throw s!"Unexpected clause id {clId}"
     | some db => pure (some db)
-| Rule.delete clauses => do
+| delete clauses => do
   let mut db := db
   for clId in clauses do
     db := db.deleteClause clId
   pure (some db)
+
+end LRatStep
+
 
 /-
 def ClauseDB.isSat (db:ClauseDB) : Prop := sorry
@@ -320,10 +316,11 @@ theorem verifyRuleShowsUnsat (db:ClauseDB) (rl:Rule)
 partial def readLRat (h:ByteStream) (varCount:UInt64) (db:ClauseDB) : IO Unit := do
   h.skipWS;
   if ←h.isEof then throw $ IO.userError s!"End of file reached before empty clause derived."
-  let rl ← getRule h varCount db.maxClauseId
-  match verifyRule db rl with
-  | Except.error msg => throw $ IO.userError msg
-  | Except.ok none =>
-    IO.println "UNSAT"
+  let rl ← LRatStep.read h varCount db.maxClauseId
+  match LRatStep.verify db rl with
+  | Except.error msg =>
+    throw $ IO.userError msg
+  | Except.ok none => do
+    pure ()
   | Except.ok (some db) =>
     readLRat h varCount db

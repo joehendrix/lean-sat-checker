@@ -1,4 +1,3 @@
-
 import SatChecker.LRat
 
 def main (args:List String) : IO Unit := do
@@ -15,6 +14,7 @@ def main (args:List String) : IO Unit := do
     let cnf ← Dimacs.read h
     let h ← ByteStream.fromPath lratFile
     readLRat h cnf.varCount (ClauseDB.fromDimacs cnf)
+    IO.println s!"Verified {dimacsFile} is unsat."
   | "lrat" :: _ => do
     IO.println "Expected dimacsfile and lratfile."
   | cmd :: _ =>
