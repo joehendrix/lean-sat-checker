@@ -11,17 +11,21 @@ def clauseCount (d:Dimacs) : Nat := d.clauses.size
 
 --- @Clause.read' h vc a@ Read a list of ints with magnitude between 1 and vc
 --- and stops when it reads a zero.
-partial def readClause' (h:ByteStream) (varCount: UInt64) (a:Array Lit) : IO Clause := do
+partial def readClause' (h:ByteStream) (varCount: UInt64) (a:Array Lit) : IO (Array Lit) := do
   h.skipWS
   let l ← Lit.read h varCount
   if l.isNull then
-      pure ⟨a⟩
+    pure a
   else
     readClause' h varCount (a.push l)
 
 /--- Read a line expected to contain a clause. -/
 def readClause (h:ByteStream) (varCount:UInt64) : IO Clause := do
-  readClause' h varCount Array.empty
+  let a ← readClause' h varCount Array.empty
+  if p : 0 < a.size then
+    pure ⟨a, p⟩
+  else
+   throw (IO.userError ("Encountered non-empty clause."))
 
 partial def read (h:ByteStream) : IO Dimacs := do
   let c ← h.getByte

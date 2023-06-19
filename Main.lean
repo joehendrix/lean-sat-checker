@@ -10,11 +10,11 @@ def main (args:List String) : IO Unit := do
   | "dimacs" :: _ => do
     IO.println "Expected dimacsfile."
   | ["lrat", dimacsFile, lratFile] => do
-    let h ← ByteStream.fromPath dimacsFile
-    let cnf ← Dimacs.read h
-    let h ← ByteStream.fromPath lratFile
-    readLRat h cnf.varCount (ClauseDB.fromDimacs cnf)
-    IO.println s!"Verified {dimacsFile} is unsat."
+    let hDimacs ← ByteStream.fromPath dimacsFile
+    let cnf   ← Dimacs.read hDimacs
+    let hLrat ← ByteStream.fromPath lratFile
+    verifyDimacs cnf hLrat
+    IO.println s!"Verified {lratFile} is a proof that {dimacsFile} is unsat."
   | "lrat" :: _ => do
     IO.println "Expected dimacsfile and lratfile."
   | cmd :: _ =>

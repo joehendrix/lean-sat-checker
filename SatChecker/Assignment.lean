@@ -32,12 +32,15 @@ def set (a:Assignment) (l:Lit) : Assignment :=
   { values := a.values.insert l.var l.polarity }
 
 -- Create assignment from negating literals in clause.
-def negatedClause (c:Clause) : Assignment := Id.run do
+def negatedClause' (c:Array Lit) : Assignment := Id.run do
   let mut a : Std.HashMap UInt64 Bool := ∅
   for l in c do
     a := a.insert l.var !l.polarity
   { values := a }
 
+-- Create assignment from negating literals in clause.
+def negatedClause (c:Clause) : Assignment := negatedClause' c.lits
+  
 -- Return value of literal in assignment (none if unassigned).
 def getOp (self:Assignment) (idx:Lit) : Option Bool :=
   let r := self.values.find? idx.var
@@ -46,7 +49,7 @@ def getOp (self:Assignment) (idx:Lit) : Option Bool :=
 instance : Membership Var Assignment where
   mem v a := a.assigned v
 
-instance : CoeFun Assignment (λa => Lit → Option Bool) where
+instance : CoeFun Assignment (λ_a => Lit → Option Bool) where
   coe := value
 
 def isExtension (a b:Assignment) : Prop := ∀(l:Lit), l.var ∈ a → a l = b l

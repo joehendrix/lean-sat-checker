@@ -14,8 +14,7 @@ namespace ByteStream
 def fromPath (path:String) : IO ByteStream := do
   let h ← IO.FS.Handle.mk path IO.FS.Mode.read
 
-  let eof ← h.isEof
-  let b ← if eof then pure ByteArray.empty else h.read 1
+  let b ← h.read 1
   let n := if b.size > 0 then b.get! 0 else 0
 
   let eofRef ← IO.mkRef (b.size == 0)
@@ -32,28 +31,22 @@ def peekByte (h:ByteStream) : IO UInt8 := do
 def skipByte (h:ByteStream) : IO Unit := do
   if ← h.isEof then
     throw $ IO.userError "Attempt to read past end of file."
-  if ← h.rest.isEof then
+  let b ← h.rest.read 1
+  if b.size == 0 then
     h.eofRef.set true
   else
-    let b ← h.rest.read 1
-    if b.size == 0 then
-      h.eofRef.set true
-    else
-      h.next.set (b.get! 0)
+    h.next.set (b.get! 0)
 
 def getByte (h:ByteStream) : IO UInt8 := do
   if ← h.eofRef.get then
     throw $ IO.userError "Attempt to read past end of file."
-  let b ← h.next.get
-  if ← h.rest.isEof then
+  let n ← h.next.get
+  let b ← h.rest.read 1
+  if b.size == 0 then
     h.eofRef.set true
   else
-    let b ← h.rest.read 1
-    if b.size == 0 then
-      h.eofRef.set true
-    else
-      h.next.set (b.get! 0)
-  pure b
+    h.next.set (b.get! 0)
+  pure n
 
 def getLine (h:ByteStream) : IO Unit := do
   if ← h.eofRef.get then

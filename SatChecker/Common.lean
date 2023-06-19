@@ -22,18 +22,6 @@ partial def ByteArray.beq (x y : ByteArray) : Bool :=
 instance : BEq ByteArray where
   beq := ByteArray.beq
 
-namespace Std
-namespace HashMap
-variable {α β} [BEq α] [Hashable α]
-
-def modify (m:HashMap α β) (a:α) (f : β → β) : HashMap α β :=
-  match m.find? a with
-  | none => m
-  | some x => m.insert a (f x)
-
-end HashMap
-end Std
-
 class ForIn2 (m : Type u₁ → Type u₂) (ρ : Type u) (x : ρ) (α : outParam (Type v)) where
   forIn {β} [Monad m] (b : β) (f : α → β → m (ForInStep β)) : m β
 
@@ -42,7 +30,7 @@ partial def Fin.forIn {β} {n} [Monad m] (b : β) (f : (a : Fin n) → β → m 
         if h : i < n then
             match ← f  ⟨i, h⟩ b with
             | ForInStep.done a => pure a
-            | ForInStep.yield a => loop (i+i) b
+            | ForInStep.yield a => loop (i+i) a
         else
           pure b
   loop 0 b
