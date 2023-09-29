@@ -1,8 +1,5 @@
-import SatChecker.ByteStream
-import SatChecker.SignedInt
-import SatChecker.Dimacs
-
 import SatChecker.Assignment
+import SatChecker.Dimacs
 
 -- | A one based index of a clause
 @[reducible]
@@ -199,7 +196,7 @@ def ratCheckClause (db:ClauseDB) (pivot:Lit) (a:Assignment) (c: Array (ClauseId 
           continue
         match a.getOp l with
         -- Assign proof
-        | none => a := a.set l.negate
+        | none => a := a.set (-l)
         -- If literal is already false then do nothing
         | some false => pure ()
         -- If literal is true, then we should be able to resolve.
@@ -227,19 +224,19 @@ namespace LRatStep
 /--
  - Read the unit propagation information and return terminating clauseId
  -/
-partial def getRup (h:ByteStream) (maxClauseId:ClauseId) : IO (UnitClauseArray × ClauseId) := do
+partial def getRup (h:AsciiStream) (maxClauseId:ClauseId) : IO (UnitClauseArray × ClauseId) := do
   let rec loop (a:Array ClauseId) : IO (UnitClauseArray × ClauseId) := do
-            let n ← SignedInt.read h "Clause" maxClauseId
+            let n ← Lit.read h "Clause" maxClauseId
             if !n.isPos then
-              pure (a, n.magnitude)
+              pure (a, n.var)
             else
-              loop (a.push n.magnitude)
+              loop (a.push n.var)
   loop Array.empty
 
 /--
  - Get next step from LRat format
  -/
-partial def read (h:ByteStream) (varCount:UInt64) (maxClauseId:ClauseId) : IO LRatStep := do
+partial def read (h:AsciiStream) (varCount:UInt64) (maxClauseId:ClauseId) : IO LRatStep := do
   -- Read the next clause
   let newClauseId ← h.getUInt64
   h.skipWS;
@@ -296,7 +293,7 @@ def verify (db:ClauseDB) : LRatStep → Except String (Option ClauseDB)
       pure none
 | lrat clId c clauses cases => do
   let a := Assignment.negatedClause c
-  let pivot := c.pivot.negate
+  let pivot := -c.pivot
   match ← applyRup db a clauses with
   | none =>
     throw s!"{clId} unexpected: Unit propagation resolved."
@@ -331,7 +328,7 @@ theorem verifyRuleShowsUnsat (db:ClauseDB) (rl:Rule)
 -/
 
 -- Reads lines from the proof file and updates the clause database
-def readLRat (h:ByteStream) (varCount:UInt64) (db:ClauseDB) (cnt:Nat) : IO Unit := do
+def readLRat (h:AsciiStream) (varCount:UInt64) (db:ClauseDB) (cnt:Nat) : IO Unit := do
   h.skipWS;
   if ←h.isEof then throw $ IO.userError s!"End of file reached before empty clause derived."
   let rl ← LRatStep.read h varCount db.maxClauseId
@@ -349,5 +346,5 @@ def readLRat (h:ByteStream) (varCount:UInt64) (db:ClauseDB) (cnt:Nat) : IO Unit 
 
 def maxProofGas : Nat := (1 <<< 64) - 1 
 
-def verifyDimacs (cnf : Dimacs) (h:ByteStream) : IO Unit := do
+def verifyDimacs (cnf : Dimacs) (h:AsciiStream) : IO Unit := do
   readLRat h cnf.varCount (ClauseDB.fromDimacs cnf) maxProofGas

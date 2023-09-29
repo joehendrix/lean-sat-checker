@@ -1,42 +1,5 @@
 import SatChecker.Common
-import SatChecker.SignedInt
-
-/-- A literal
- - A literal is encoded as the literal index shifted by one.
- - The least significant bit is set if the literal is negated.
- -/
-def Lit := SignedInt
-
-def Var := UInt64
-  deriving BEq, Hashable
-
-namespace Lit
-
-def isNull (l:Lit) : Bool := l.value == 0
-
-def var (l:Lit) : Var := l.magnitude
-
-/-- Return true if literal is positive and false if negative. -/
-def polarity (l:Lit) : Bool := l.isPos
-
--- @Lit.read h vc@ read the next signed numeral from @h@ with magnitude
--- between 0 and vc and returns a literal for it.
-def read (h:ByteStream) (varCount: UInt64) : IO Lit := SignedInt.read h "Variable" varCount
-
--- Negate literal
-def negate (l:Lit) : Lit := ⟨l.value ^^^ 1⟩
-
-instance : Inhabited Lit := ⟨{value := 0}⟩
-
-protected def beq (x y : Lit) : Bool := x.value == y.value
-
-instance : BEq Lit where
-  beq := Lit.beq
-
-instance : ToString Lit where
-  toString := SignedInt.toString
-
-end Lit
+import SatChecker.Lit
 
 structure Clause :=
 (lits : Array Lit)
